@@ -1,26 +1,34 @@
 from flask import Flask, jsonify, request, render_template, make_response
-from redis import StrictRedis
-from redis.exceptions import ConnectionError
 import os, hashlib, uuid, logging
-from datetime import timedelta
+from datetime import timedelta, datetime
+import boto3
+
+client = boto3.client('s3')
+
+BUCKET = os.environ.get('S3_BUCKET', "")
+if BUCKET == "":
+    raise "S3_BUCKET environment variable is unset."
 
 get_hash = lambda: hashlib.md5(uuid.uuid4().bytes).hexdigest()[:12]
 
 app = Flask(__name__)
-
-db = StrictRedis.from_url(os.environ.get('REDIS_URL', "redis://localhost:6379"), db=2, decode_responses=True)
-
-try:
-    db.ping()
-except (ConnectionError):
-    print("Cannot connect to Redis. Make sure it's running at REDIS_URL or localhost:6379")
-    quit()
 
 @app.before_first_request
 def setup_logging():
     app.logger.addHandler(logging.StreamHandler())
     app.logger.setLevel(logging.INFO)
 
+
+def destructOptionToExpires(destructOption):
+    expires = datetime.now()
+    if destructOption == "1h":
+        expires += timedelta(hours=1)
+    elif destructOption == "1d":
+        expires += timedelta(days=1)
+    elif destructOption == "1w":
+        expires += timedelta(weeks=1)
+
+    return expires
 
 @app.route('/api/v1/create', methods=['POST'])
 def api_v1_create():
@@ -35,21 +43,21 @@ def api_v1_create():
         return make_response(jsonify(error='Bad Request'), 400)
 
     key = get_hash()
-    db.set(key, ciphertext)
 
-    if ('token' in request.form) and ('encryptedToken' in request.form):
-        db.set(key + "_encryptedToken", request.form['encryptedToken'])
-        db.set(key + "_" + request.form['token'], 'true')
+    s3_object = {
+        "Key": key,
+        "Body": ciphertext,
+        "Bucket": BUCKET,
+        "Metadata": {
+            'encryptedtoken': request.form['encryptedToken'] if ('token' in request.form) and ('encryptedToken' in request.form) else "",
+            'token': request.form['token'] if 'token' in request.form else ""
+        }
+    }
 
     if 'destructOption' in request.form:
-        destructOption = request.form['destructOption']
+        s3_object["Expires"] = destructOptionToExpires(request.form['destructOption'])
 
-        if destructOption == "1h":
-            db.expire(key, timedelta(hours=1))
-        elif destructOption == "1d":
-            db.expire(key, timedelta(days=1))
-        elif destructOption == "1w":
-            db.expire(key, timedelta(weeks=1))
+    client.put_object(**s3_object)
 
     return make_response(jsonify(error=None, key=key), 200)
 
@@ -65,8 +73,20 @@ def api_v1_destruct():
     if (not len(key) == 12) or (not len(token) == 64):
         return make_response(jsonify(error='Bad Request'), 400)
 
-    if db.exists(key + "_" + token):
-        db.delete(key, key + "_encryptedToken", key + "_" + token)
+    s3_object = None
+    try:
+        s3_object = client.get_object(Bucket=BUCKET, Key=key)
+    except ClientError as ex:
+        if ex.response['Error']['Code'] == 'NoSuchKey':
+            logger.info('No object found - returning empty')
+            return render_template("404.html", key=key), 404
+        return
+
+    if s3_object["Metadata"].get("token") == request.form['token']:
+        client.delete_object(
+            Bucket=BUCKET,
+            Key=key,
+        )
         return make_response(jsonify(error=None, success="true"), 200)
     else:
         return make_response(jsonify(error=None, success="false"), 200)
@@ -89,20 +109,21 @@ def index():
 
 @app.route("/<key>")
 def paste(key):
-    if not db.exists(key):
+
+    s3_object = None
+    try:
+        s3_object = client.get_object(Bucket=BUCKET, Key=key)
+    except client.exceptions.NoSuchKey as ex:
         return render_template("404.html", key=key), 404
 
-    ciphertext = db.get(key)
+    ciphertext = s3_object["Body"].read()
 
-    encryptedToken = ""
-    if db.exists(key + "_encryptedToken"):
-        encryptedToken = db.get(key + "_encryptedToken")
+    encryptedToken = s3_object["Metadata"]["encryptedtoken"] if 'encryptedtoken' in s3_object["Metadata"] else ""
 
     googleAnalyticsId = os.environ.get('GOOGLE_ANALYTICS_ID', "")
 
-    return render_template("paste.html", ciphertext=str(ciphertext),
-        encryptedToken=str(encryptedToken), key=key, analyticsId=googleAnalyticsId)
-
+    return render_template("paste.html", ciphertext=ciphertext.decode('UTF-8'),
+        encryptedToken=encryptedToken, key=key, analyticsId=googleAnalyticsId)
 
 if __name__ == '__main__':
     app.run('0.0.0.0', port=5000)
