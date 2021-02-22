@@ -9,7 +9,7 @@ jobs:
 
       - name: Set base image env
         run: |
-          echo "BASE_IMAGE=ghcr.io/adrianchifor/ctrlv.space" >> $GITHUB_ENV
+          echo "BASE_IMAGE=ghcr.io/tomaspinho/ctrlv.space" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
