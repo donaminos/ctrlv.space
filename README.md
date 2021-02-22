@@ -14,7 +14,7 @@ The paste creation process:
     - Encrypted text box content, if self-destruct is disabled.
     - Encrypted text box content + token & encrypted token, if self-destruct 'once read' option is enabled.
     - Encrypted text box content + self-destruct option (e.g. 1h), if self-destruct timing option is enabled.
-- Backend saves things in Redis and returns a key. We now construct the sharing URL:
+- Backend saves things in S3 and returns a key. We now construct the sharing URL:
     - https://ctrlv.space/*key*#*password* where:
         - *key*: used to retrieve the encrypted content from the server.
         - *password*: used to decrypt the content. **Password is never sent to the server** as it resides after the # fragment.
@@ -28,7 +28,7 @@ The paste viewing process:
 
 ## Env vars
 
-`REDIS_URL` - defaults to redis://localhost:6379 (if using dokku, will be automatically set when linking with Redis service)<br>
+`S3_BUCKET` - the name of the S3 bucket where to store the files (make sure to configure AWS SDK for proper authentication)<br>
 `SELF_DESTRUCT_MANDATORY` - defaults to false (If set, will disable the 'Self-destruct' checkbox so it's always ticked)<br>
 `MAX_LENGTH` - defaults to 5000 (Maximum number of characters allowed in the text box)<br>
 `GOOGLE_ANALYTICS_ID` - defaults to ""
@@ -36,13 +36,11 @@ The paste viewing process:
 ## Run
 
 Using Docker:
-* Use an external Redis or host your own: `docker run --name redis -d redis`
-* Run the app: `docker run -d --link redis:redis -p 80:5000 -e REDIS_URL="redis://redis:6379" ghcr.io/adrianchifor/ctrlv.space:latest`
-  * If you're using an external Redis omit the `--link` and set the `REDIS_URL` accordingly.
+* Run the app: `docker run -d -p 80:5000 -e S3_BUCKET="my_beautiful_bucket" ghcr.io/adrianchifor/ctrlv.space:latest`
 
 Using [dokku](http://dokku.viewdocs.io/dokku/):
 * Create `ctrlv` app on dokku
-* Create a Redis service on dokku using this [plugin](https://github.com/dokku/dokku-redis) and link it with `ctrlv` (this will set the `REDIS_URL` env var)
+* Create a S3 bucket
 * Set the rest of the env vars on dokku: `dokku config:set ctrlv <ENV>=<VALUE>`
 * Set the dokku remote in the git repo:
 `git remote add dokku dokku@example.com:ctrlv`
@@ -51,7 +49,7 @@ Using [dokku](http://dokku.viewdocs.io/dokku/):
 
 ### License
 
-Copyright &copy; 2020 Adrian Chifor
+Copyright &copy; 2020 Adrian Chifor; 2021 Tomás Pinho
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
